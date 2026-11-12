@@ -1,6 +1,6 @@
 [package]
 name = "usb-cdc-hil"
-description = "On-target programs of the usb-cdc crate. Run with tools/run.sh alive, usb_cdc_smoke or usb_cdc_fullpacket; tools/usb_smoke.sh drives them with the host program."
+description = "On-target programs of the usb-cdc crate. Run with tools/run.sh alive, usb_cdc_smoke, usb_cdc_fullpacket, usb_cdc_link or usb_cdc_unplug; tools/usb_smoke.sh drives them with the host program."
 version = "0.1.0"
 edition = "2024"
 publish = false
@@ -21,6 +21,7 @@ defmt-rtt = "1.0.0"
 cortex-m = { version = "0.7", features = ["inline-asm"] }
 cortex-m-rt = "0.7"
 critical-section = "1.1"
+embassy-sync = "0.8.0"
 embassy-usb = { version = "0.6.0", default-features = false, features = ["defmt"] }
 embedded-io-async = "0.7"
 embassy-futures = "0.1.2"

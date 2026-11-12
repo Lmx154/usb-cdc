@@ -1,6 +1,9 @@
 //! Computer side of the usb-cdc on-board proof. Finds the test board by VID 0xc0de and PID 0xcafe,
 //! drives the line protocol of `hil/src/proto` and prints [PASS] / [FAIL] / [INFO] lines.
-//! `usb-cdc-host smoke` drives `usb_cdc_smoke`; `usb-cdc-host fullpacket` drives `usb_cdc_fullpacket`.
+//! `usb-cdc-host smoke` drives `usb_cdc_smoke`; `usb-cdc-host fullpacket` drives `usb_cdc_fullpacket`;
+//! `usb-cdc-host link` drives `usb_cdc_link` (checks A to E: the computer stops reading, closes and
+//! reopens, the device detaches itself, the computer resets the device); `usb-cdc-host unplug` drives
+//! `usb_cdc_unplug` and needs a person to pull the cable.
 //! Exit status 0 only if every check passed.
 
 use std::collections::VecDeque;
@@ -9,7 +12,7 @@ use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use serialport::{ClearBuffer, SerialPort, SerialPortType};
@@ -23,6 +26,8 @@ const ECHO_BYTES: usize = 1 << 20;
 const SEND_BYTES: u32 = 4 << 20;
 const RECV_BYTES: u32 = 1 << 20;
 const THROUGHPUT_FLOOR_KBPS: f64 = 250.0;
+
+mod link;
 
 fn pat(i: u64) -> u8 {
     (i % 251) as u8
@@ -89,6 +94,9 @@ struct Conn {
     rx: Receiver<Msg>,
     queue: VecDeque<Chunk>,
     stop: Arc<AtomicBool>,
+    /// While set the reader thread does not read, so the kernel buffers what arrives.
+    pause: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
     read_error: Option<String>,
 }
 
@@ -99,9 +107,15 @@ impl Conn {
         let (tx, rx) = channel();
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
-        thread::spawn(move || {
+        let pause = Arc::new(AtomicBool::new(false));
+        let hold = pause.clone();
+        let handle = thread::spawn(move || {
             let mut buf = vec![0u8; 65536];
             while !flag.load(Ordering::Relaxed) {
+                if hold.load(Ordering::Relaxed) {
+                    thread::sleep(Duration::from_millis(2));
+                    continue;
+                }
                 match reader.read(&mut buf) {
                     Ok(0) => {}
                     Ok(n) => {
@@ -127,8 +141,22 @@ impl Conn {
             rx,
             queue: VecDeque::new(),
             stop,
+            pause,
+            handle: Some(handle),
             read_error: None,
         })
+    }
+
+    /// Stops the reader thread and closes the port for real (both file descriptors).
+    fn close(mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+
+    fn hold(&self, on: bool) {
+        self.pause.store(on, Ordering::Relaxed);
     }
 
     fn send(&mut self, bytes: &[u8]) -> std::io::Result<()> {
@@ -385,10 +413,10 @@ fn field(line: &str, key: &str) -> Option<i64> {
         .find_map(|w| w.strip_prefix(key)?.strip_prefix('=')?.parse().ok())
 }
 
-fn make_sizes(rng: &mut Rng, total: usize) -> Vec<usize> {
+fn make_sizes(rng: &mut Rng, total: usize, forced: usize) -> Vec<usize> {
     let mut sizes = Vec::new();
     for s in [63usize, 64, 65, 128, 4096] {
-        sizes.extend(std::iter::repeat_n(s, 20));
+        sizes.extend(std::iter::repeat_n(s, forced));
     }
     let mut sum: usize = sizes.iter().sum();
     loop {
@@ -411,7 +439,7 @@ fn make_sizes(rng: &mut Rng, total: usize) -> Vec<usize> {
 
 fn echo_test(c: &mut Conn, rep: &mut Rep) {
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
-    let sizes = make_sizes(&mut rng, ECHO_BYTES);
+    let sizes = make_sizes(&mut rng, ECHO_BYTES, 20);
     let mut data = vec![0u8; ECHO_BYTES];
     for chunk in data.chunks_mut(8) {
         let r = rng.next().to_le_bytes();
@@ -762,21 +790,27 @@ fn fullpacket(rep: &mut Rep) {
 
 fn main() {
     let mode = std::env::args().nth(1).unwrap_or_default();
-    if mode != "smoke" && mode != "fullpacket" {
-        eprintln!("usage: usb-cdc-host smoke | fullpacket");
+    if !["smoke", "fullpacket", "link", "unplug"].contains(&mode.as_str()) {
+        eprintln!("usage: usb-cdc-host smoke | fullpacket | link | unplug");
         exit(2);
     }
-    thread::spawn(|| {
-        thread::sleep(Duration::from_secs(150));
-        println!("[FAIL] host program ran longer than 150 s");
+    let limit = match mode.as_str() {
+        "link" => 270,
+        "unplug" => 900,
+        _ => 150,
+    };
+    thread::spawn(move || {
+        thread::sleep(Duration::from_secs(limit));
+        println!("[FAIL] host program ran longer than {limit} s");
         exit(1);
     });
     let mut rep = Rep::default();
     let t0 = Instant::now();
-    if mode == "smoke" {
-        smoke(&mut rep);
-    } else {
-        fullpacket(&mut rep);
+    match mode.as_str() {
+        "smoke" => smoke(&mut rep),
+        "fullpacket" => fullpacket(&mut rep),
+        "link" => link::run(&mut rep),
+        _ => link::unplug(&mut rep),
     }
     println!(
         "host {mode}: {} passed, {} failed, {:.1} s",

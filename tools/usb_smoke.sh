@@ -2,13 +2,16 @@
 # Runs one on-board USB program through tools/run.sh in the background, runs the host program
 # against it, waits for both, prints both reports. Exit status 0 only if both exit 0.
 #
-# Usage: tools/usb_smoke.sh [smoke|fullpacket]
+# Usage: tools/usb_smoke.sh [smoke|fullpacket|link|unplug]   (unplug needs a person at the board)
 set -u
 mode="${1:-smoke}"
+tmo=150
 case "$mode" in
   smoke) bin=usb_cdc_smoke ;;
   fullpacket) bin=usb_cdc_fullpacket ;;
-  *) echo "usage: tools/usb_smoke.sh [smoke|fullpacket]" >&2; exit 2 ;;
+  link) bin=usb_cdc_link; tmo=280 ;;
+  unplug) bin=usb_cdc_unplug; tmo=960 ;;
+  *) echo "usage: tools/usb_smoke.sh [smoke|fullpacket|link|unplug]" >&2; exit 2 ;;
 esac
 cd "$(dirname "$0")/.." || exit 1
 root="$PWD"
@@ -25,7 +28,7 @@ mkdir -p hil/logs
 stamp="$work/stamp"
 touch "$stamp"
 sleep 1
-tools/run.sh "$bin" 150 >"$work/device.out" 2>&1 &
+tools/run.sh "$bin" "$tmo" >"$work/device.out" 2>&1 &
 dev_pid=$!
 
 # run.sh builds, flashes and starts the program; its log appears in hil/logs and shows the start line.

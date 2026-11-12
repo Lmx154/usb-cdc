@@ -130,3 +130,140 @@ pub mod proto {
         }
     }
 }
+
+/// Numbered 63-byte records: a sequence number, a body that depends on it and a checksum, so that
+/// a torn, repeated or reordered record shows on the computer. The host program has the same code.
+pub mod rec {
+    /// One record is exactly one IN packet of the crate.
+    pub const LEN: usize = 63;
+    /// Report frames of the link program start with these four bytes, which no sequence number
+    /// below 1.1 billion has.
+    pub const REPORT_TAG: &[u8; 4] = b"REPO";
+
+    fn sum(data: &[u8]) -> u32 {
+        let mut h: u32 = 0x811c_9dc5;
+        for b in data {
+            h ^= u32::from(*b);
+            h = h.wrapping_mul(0x0100_0193);
+        }
+        h
+    }
+
+    /// Builds record `seq`.
+    pub fn fill(seq: u32, out: &mut [u8; LEN]) {
+        out[..4].copy_from_slice(&seq.to_le_bytes());
+        for (i, b) in out[4..59].iter_mut().enumerate() {
+            *b = (seq as u8)
+                .wrapping_mul(31)
+                .wrapping_add(i as u8 ^ (seq >> 8) as u8);
+        }
+        let c = sum(&out[..59]);
+        out[59..].copy_from_slice(&c.to_le_bytes());
+    }
+}
+
+/// What the device's `embassy_usb::Handler` calls are, with the time of each: a second handler
+/// next to the crate's own, to see what the USB controller reports. It only stores; nothing is
+/// logged from the callbacks.
+pub mod spy {
+    use core::cell::RefCell;
+    use core::fmt::Write as _;
+    use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
+
+    use critical_section::Mutex;
+    use embassy_usb::Handler;
+
+    use crate::proto::Out;
+
+    const CAP: usize = 24;
+
+    struct Log {
+        n: usize,
+        t: [u32; CAP],
+        c: [u8; CAP],
+    }
+
+    static LOG: Mutex<RefCell<Log>> = Mutex::new(RefCell::new(Log {
+        n: 0,
+        t: [0; CAP],
+        c: [0; CAP],
+    }));
+    /// `configured(true)` calls since power-up.
+    pub static CONFIGURED: AtomicU32 = AtomicU32::new(0);
+    /// Calls that did not fit the log since the last `clear`.
+    pub static DROPPED: AtomicU32 = AtomicU32::new(0);
+
+    /// Microseconds of the embassy timer, wrapping after 71 minutes.
+    pub fn now_us() -> u32 {
+        embassy_time::Instant::now().as_micros() as u32
+    }
+
+    fn log(code: u8) {
+        let t = now_us();
+        critical_section::with(|cs| {
+            let mut l = LOG.borrow_ref_mut(cs);
+            let i = l.n;
+            if i < CAP {
+                l.t[i] = t;
+                l.c[i] = code;
+                l.n += 1;
+            } else {
+                DROPPED.fetch_add(1, Relaxed);
+            }
+        });
+    }
+
+    /// Forgets the log.
+    pub fn clear() {
+        critical_section::with(|cs| LOG.borrow_ref_mut(cs).n = 0);
+        DROPPED.store(0, Relaxed);
+    }
+
+    /// Entries logged since the last `clear`.
+    pub fn len() -> usize {
+        critical_section::with(|cs| LOG.borrow_ref(cs).n)
+    }
+
+    /// Appends up to `max` entries from `from` on to `out` as `<code>@<microseconds after base>`
+    /// separated by commas; returns the index after the last one written.
+    /// Codes: E enabled(true), e enabled(false), R reset, A addressed, C configured(true),
+    /// c configured(false), S suspended(true), U suspended(false).
+    pub fn write(out: &mut Out, base: u32, from: usize, max: usize) -> usize {
+        let n = len();
+        let mut i = from;
+        while i < n && i < from + max {
+            let (c, t) = critical_section::with(|cs| {
+                let l = LOG.borrow_ref(cs);
+                (l.c[i], l.t[i])
+            });
+            let sep = if i == from { "" } else { "," };
+            let _ = write!(out, "{}{}@{}", sep, c as char, t.wrapping_sub(base) as i32);
+            i += 1;
+        }
+        i
+    }
+
+    /// The second handler. Register it with `Builder::handler` before the crate's.
+    pub struct Spy;
+
+    impl Handler for Spy {
+        fn enabled(&mut self, enabled: bool) {
+            log(if enabled { b'E' } else { b'e' });
+        }
+        fn reset(&mut self) {
+            log(b'R');
+        }
+        fn addressed(&mut self, _addr: u8) {
+            log(b'A');
+        }
+        fn configured(&mut self, configured: bool) {
+            if configured {
+                CONFIGURED.fetch_add(1, Relaxed);
+            }
+            log(if configured { b'C' } else { b'c' });
+        }
+        fn suspended(&mut self, suspended: bool) {
+            log(if suspended { b'S' } else { b'U' });
+        }
+    }
+}

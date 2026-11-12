@@ -1,8 +1,8 @@
 # USB CDC-ACM on the MARV V2 Rev 1 board: the bare class and the rules this crate applies
 
 Source read: `embassy-usb` 0.6.0 (`EU`), `embassy-usb-driver` 0.2.2, `embassy-rp` 0.10.0 (`ERP`), all under
-`~/.cargo/registry/src/*/`. Line numbers are in those files. Nothing here was measured on the board yet;
-the board facts are in `README.md` ("Measured on the MARV V2 Rev 1 board", still empty).
+`~/.cargo/registry/src/*/`. Line numbers are in those files. The sections above this line are from reading the sources; what the board does is in the last
+section and in `README.md` ("Measured on the MARV V2 Rev 1 board").
 
 ## The three traps of the bare class
 
@@ -68,10 +68,34 @@ own control state does, `cdc_acm.rs:108-115`): the handler runs in the task of `
 the link task, possibly on another executor or core. The crate has no `critical_section::with` call of its own
 and no atomic; the lock is held for a few instructions per poll.
 
-## Open questions for the board
+## What the board did (measured with `usb_cdc_link`; figures in `README.md`)
 
-- Whether the host really holds back a 64-byte IN packet on Linux, Windows and macOS (the crate avoids it; the
-  positive control of the board test shows it).
-- Whether a bus reset or a soft detach ends a pending `write` within 50 ms through this crate (host tests prove the
-  wake-up path against a fake that never ends its futures, as embassy-rp does).
-- Throughput with 63-byte packets (the contract asks for at least 250 kB/s device to host).
+- **Soft detach.** Releasing the D+ pull-up while the device is configured gives `Handler::reset()` about 100 us
+  later (98 to 116 us in 70 cycles) and nothing else until the pull-up is enabled again. The crate therefore sees
+  the link go down and a pending `Tx::write` returns `NotConnected` 161 to 234 us after the release. No suspend
+  comes first. After the pull-up is enabled again: `suspended(true)` 3 ms later (idle
+  bus before the computer reacts), `reset()` twice (about 0.6 s and 0.7 s after the release), `addressed`, then
+  `configured(true)` about 345 ms after the pull-up came back. So `Stats` counts one down, one up, three resets (sometimes
+  four) and one suspend per soft detach.
+- **Closing the port on the computer does not touch the link.** `Stats` did not change over 20 close/open cycles; DTR
+  goes false on close and true on open (two edges per cycle) and nothing else is reported.
+- **A computer that stops reading.** `Tx::write` completes when the endpoint takes the packet: with the port open and
+  not read, the computer's side took about 5 KB (81 records of 63 bytes with the one in the endpoint) and `FIONREAD`
+  stayed at 4095; then every `write_all` waited for its full timeout (100.005 to 100.012 ms measured), and the
+  executor's 1 kHz task never ran late (largest period 1.27 ms over all runs, limit 1.5 ms). With the port closed the endpoint stays NAKing
+  and writes wait the same way. The packet that sat in the endpoint was delivered when the port was opened again.
+- **Bytes from the old session.** 40 bytes the computer sent while the device was not reading were still in the OUT
+  endpoint when the device detached; none of them reached the device after the bus reset in 70 cycles (in a control without a
+  detach they do reach it). `Rx` also drops a packet it holds when the session changes.
+- **Interrupts-off time.** Longest gap between SysTick interrupts: idle 7.5 to 15.6 us, echo running 8.7 to 15.8 us,
+  link flapping 17.5 to 23.3 us. `Link::is_up()` costs 91 to 93 cycles including the critical section. The figures
+  cover the whole program (HAL, embassy-usb, timer driver, this crate).
+
+## Still open for the board
+
+- A physical unplug (`usb_cdc_unplug`, not run): the controller has no VBUS detection in embassy-rp, so the cable
+  pull should show as `suspended(true)` after about 3 ms of idle bus; not measured.
+- Whether the computer can end the link without a person (`USBDEVFS_RESET` and sysfs need root here).
+- Windows and macOS.
+- Throughput with 63-byte packets was measured by the first packet: 757 kB/s device to computer (at least 250 kB/s
+  was required).
