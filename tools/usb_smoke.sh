@@ -28,9 +28,14 @@ mkdir -p hil/logs
 stamp="$work/stamp"
 touch "$stamp"
 sleep 1
-tools/run.sh "$bin" "$tmo" >"$work/device.out" 2>&1 &
+# The device run gets its own process group, so that stopping this script (Ctrl-C included) also
+# stops it: a run left behind would keep the debug probe locked for its whole timeout.
+setsid tools/run.sh "$bin" "$tmo" >"$work/device.out" 2>&1 &
 dev_pid=$!
+trap 'kill -- "-$dev_pid" 2>/dev/null; rm -rf "$work"' EXIT
+trap 'exit 130' INT TERM
 
+echo "Building and flashing $bin (this waits if another run is using the debug probe) ..."
 # run.sh builds, flashes and starts the program; its log appears in hil/logs and shows the start line.
 log=""
 for _ in $(seq 1 1500); do
@@ -47,15 +52,30 @@ if [ -z "$log" ] || ! grep -q "device start" "$log" 2>/dev/null; then
   exit 1
 fi
 
-"$host_bin" "$mode" >"$work/host.out" 2>&1
-host_status=$?
+if [ "$mode" = unplug ]; then
+  echo "The board program is running. Prompts follow: act only when one tells you to."
+  # A person has to act on what the host program says: show it as it comes.
+  "$host_bin" "$mode" 2>&1 | tee "$work/host.out"
+  host_status=${PIPESTATUS[0]}
+else
+  "$host_bin" "$mode" >"$work/host.out" 2>&1
+  host_status=$?
+fi
 wait "$dev_pid"
 dev_status=$?
 
-echo "== host report ($mode) =="
-cat "$work/host.out"
+if [ "$mode" != unplug ]; then
+  echo "== host report ($mode) =="
+  cat "$work/host.out"
+fi
 echo "== device report ($bin) =="
 cat "$work/device.out"
 echo "== host exit $host_status, device exit $dev_status =="
 if [ "$host_status" -eq 0 ] && [ "$dev_status" -eq 0 ]; then exit 0; fi
+if [ "$mode" = unplug ] && [ "$host_status" -eq 0 ] && grep -q '^\[SKIP\] F: the board lost power' "$work/host.out"; then
+  # The board is powered through the cable that was pulled: the debug session ends with the power
+  # ("An ARM specific error occurred"), so the device program cannot give a verdict. Not a failure.
+  echo "The board lost power with its cable, so the device run ended early: expected on a board powered through that cable."
+  exit 0
+fi
 exit 1

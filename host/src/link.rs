@@ -729,13 +729,30 @@ pub fn unplug(rep: &mut Rep) {
         events_text(&uev)
     ));
     rep.check(
-        unp.as_deref().is_some_and(|l| f(l, "went_down") == 1)
-            && r.mismatches == 0
-            && r.missing == 0
-            && r.extra == 0
-            && r.done,
-        format!("F: the pending write ended with NotConnected, and an echo of 4 KiB in the new session passes ({} mismatched, {} missing, {} extra)", r.mismatches, r.missing, r.extra),
+        r.mismatches == 0 && r.missing == 0 && r.extra == 0 && r.done,
+        format!(
+            "F: an echo of 4 KiB in the new session passes ({} mismatched, {} missing, {} extra)",
+            r.mismatches, r.missing, r.extra
+        ),
     );
+    // A board that is powered through the cable that was pulled switches off with it: the program
+    // starts again from the beginning, so it has written no record yet and has never seen the
+    // link go down. Then nothing was observed about a pending write, and saying so is the result.
+    let restarted = unp
+        .as_deref()
+        .is_some_and(|l| f(l, "went_down") == 0 && f(l, "records") == 0 && f(l, "downs") == 0);
+    if restarted {
+        println!(
+            "[SKIP] F: the board lost power with its USB cable and started again (records 0, downs 0), so \
+             what a pending write does when the cable goes could not be observed: this check needs the \
+             board powered from another source"
+        );
+    } else {
+        rep.check(
+            unp.as_deref().is_some_and(|l| f(l, "went_down") == 1),
+            "F: the pending write ended with NotConnected when the cable was pulled".to_string(),
+        );
+    }
     let _ = c.cmd("FINISH");
     let _ = c.line(Instant::now() + Duration::from_secs(5));
 }
