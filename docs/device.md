@@ -91,10 +91,13 @@ and no atomic; the lock is held for a few instructions per poll.
   link flapping 17.5 to 23.3 us. `Link::is_up()` costs 91 to 93 cycles including the critical section. The figures
   cover the whole program (HAL, embassy-usb, timer driver, this crate).
 
+- **A physical unplug with the board on battery power** (`usb_cdc_unplug`, one pull, 2026-11-12). The controller has
+  no VBUS detection in embassy-rp, so the pull shows as a suspend and nothing else: `suspended(true)` 3208 us after
+  the last good write, the pending `Tx::write` back with `NotConnected` 38 us later. With the cable back: two resets,
+  `configured(true)` 240 ms after the first. Details in the README, check F.
+
 ## Still open for the board
 
-- A physical unplug (`usb_cdc_unplug`, not run): the controller has no VBUS detection in embassy-rp, so the cable
-  pull should show as `suspended(true)` after about 3 ms of idle bus; not measured.
 - Whether the computer can end the link without a person (`USBDEVFS_RESET` and sysfs need root here).
 - Windows and macOS.
 - Throughput with 63-byte packets was measured by the first packet: 757 kB/s device to computer (at least 250 kB/s
