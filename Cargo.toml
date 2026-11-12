@@ -1,0 +1,28 @@
+[package]
+name = "usb-cdc"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+description = "USB CDC-ACM byte pipe and link state on embassy-usb, for flight controllers: embedded-io-async Read and Write that never need a zero-length packet and never hang when the cable goes."
+
+[features]
+defmt = ["dep:defmt", "embassy-usb/defmt", "embassy-sync/defmt", "embedded-io-async/defmt"]
+# Lets the host tests drive the link state without a running USB device. Not for production.
+_test-hooks = []
+
+[dependencies]
+embassy-usb = { version = "0.6.0", default-features = false }
+embassy-sync = { version = "0.8.0", default-features = false }
+embedded-io-async = "0.7"
+defmt = { version = "1.0.1", optional = true }
+
+[workspace]
+exclude = ["hil"]
+
+[dev-dependencies]
+usb-cdc = { path = ".", features = ["_test-hooks"] }
+embassy-usb-driver = "0.2.0"
+embassy-futures = "0.1.2"
+critical-section = { version = "1.1", features = ["std"] }
+proptest = "1.12"

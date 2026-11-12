@@ -1,0 +1,12 @@
+[package]
+name = "usb-cdc-host"
+description = "Computer side of the usb-cdc on-board proof. Run through tools/usb_smoke.sh."
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+
+[dependencies]
+serialport = "4.10.1"
+
+[workspace]
