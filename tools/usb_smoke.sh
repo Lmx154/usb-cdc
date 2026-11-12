@@ -32,8 +32,29 @@ sleep 1
 # stops it: a run left behind would keep the debug probe locked for its whole timeout.
 setsid tools/run.sh "$bin" "$tmo" >"$work/device.out" 2>&1 &
 dev_pid=$!
-trap 'kill -- "-$dev_pid" 2>/dev/null; rm -rf "$work"' EXIT
-trap 'exit 130' INT TERM
+descendants() {
+  local c
+  for c in $(pgrep -P "$1" 2>/dev/null); do echo "$c"; descendants "$c"; done
+}
+# run.sh runs probe-rs under `timeout`, which moves itself to a process group of its own: a group kill
+# alone would leave probe-rs (and the probe lock it holds) behind, so every descendant is stopped too.
+stop_device() {
+  local pids p n pid
+  kill -0 "$dev_pid" 2>/dev/null || return 0
+  pids="$dev_pid $(descendants "$dev_pid")"
+  kill -TERM -- "-$dev_pid" 2>/dev/null
+  kill -TERM $pids 2>/dev/null
+  for n in $(seq 1 50); do
+    p=""
+    for pid in $pids; do kill -0 "$pid" 2>/dev/null && p="$p $pid"; done
+    [ -z "$p" ] && break
+    sleep 0.1
+  done
+  [ -z "$p" ] || kill -KILL $p 2>/dev/null
+  return 0
+}
+trap 'stop_device; rm -rf "$work"' EXIT
+trap 'exit 130' INT TERM HUP
 
 echo "Building and flashing $bin (this waits if another run is using the debug probe) ..."
 # run.sh builds, flashes and starts the program; its log appears in hil/logs and shows the start line.
