@@ -5,6 +5,11 @@ edition = "2024"
 publish = false
 license = "MIT"
 description = "USB CDC-ACM byte pipe and link state on embassy-usb, for flight controllers: embedded-io-async Read and Write that never need a zero-length packet and never hang when the cable goes."
+repository = "https://github.com/Lmx154/usb-cdc"
+readme = "README.md"
+keywords = ["embedded", "no-std", "usb", "cdc-acm", "embassy"]
+categories = ["embedded", "no-std", "hardware-support"]
+rust-version = "1.99"
 
 [features]
 defmt = ["dep:defmt", "embassy-usb/defmt", "embassy-sync/defmt", "embedded-io-async/defmt"]

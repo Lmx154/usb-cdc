@@ -4,6 +4,10 @@ USB CDC-ACM byte pipe and link state on `embassy-usb` 0.6, written for the MARV 
 
 **Status: version 0.1.0 (`publish = false`). The API may still change.** Host tests pass and the crate has been run on the MARV V2 Rev 1 board (results in "Measured on the MARV V2 Rev 1 board"; what is still open is in "Not covered and not verified"). It works with any HAL that implements `embassy-usb-driver` and with any executor. It does not work on the `usb-device` stack and has no blocking front-end (a USB device has to be serviced all the time).
 
+## Works with
+
+The crate is built on `embassy-usb` 0.6 and `embassy-sync` 0.8, so it works on any chip that has an `embassy-usb` driver, not only the RP family. It needs no executor of its own and no `embassy-time`; the application supplies a `critical-section` implementation.
+
 ## Quick start
 
 No hardware needed to read it; the firmware side looks like this (`ignore`d here because it needs a HAL driver):
